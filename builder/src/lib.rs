@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    parse_macro_input, Data, DeriveInput, Field, Fields, GenericArgument, Ident, Lit, Meta,
-    NestedMeta, PathArguments, Type,
+    parse_macro_input, spanned::Spanned, Data, DeriveInput, Error, Field, Fields, GenericArgument,
+    Ident, Lit, Meta, NestedMeta, PathArguments, Result, Type,
 };
 
 #[proc_macro_derive(Builder, attributes(builder))]
@@ -14,8 +14,14 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // Generate builder struct name.
     let builder_name = format_ident!("{}Builder", name);
+
     // Inspect all struct fields.
     let fields = convert_fields(&input.data);
+    if let Err(err) = fields {
+        return proc_macro::TokenStream::from(err.to_compile_error());
+    }
+    let fields = fields.unwrap();
+
     // Generate builder fields.
     let builder_fields = fields.iter().map(|f| f.field_token());
     // Generate setters for all the fields.
@@ -200,7 +206,7 @@ impl<'a> BuilderField<'a> {
 }
 
 // Convert all the fields in `data`.
-fn convert_fields<'a>(data: &'a Data) -> Vec<BuilderField<'a>> {
+fn convert_fields<'a>(data: &'a Data) -> Result<Vec<BuilderField<'a>>> {
     match data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => fields.named.iter().map(|f| convert_field(f)).collect(),
@@ -211,7 +217,7 @@ fn convert_fields<'a>(data: &'a Data) -> Vec<BuilderField<'a>> {
 }
 
 // Convert a `field`.
-fn convert_field<'a>(field: &'a Field) -> BuilderField<'a> {
+fn convert_field<'a>(field: &'a Field) -> Result<BuilderField<'a>> {
     let mut each_name = Option::<Ident>::default();
     for attr in &field.attrs {
         if let Ok(Meta::List(meta_list)) = attr.parse_meta() {
@@ -223,6 +229,9 @@ fn convert_field<'a>(field: &'a Field) -> BuilderField<'a> {
                                 each_name = Some(Ident::new(&name.value(), name.span()));
                                 break;
                             }
+                        } else {
+                            let span = attr.path.span().join(attr.tokens.span()).unwrap();
+                            return Err(Error::new(span, r#"expected `builder(each = "...")`"#));
                         }
                     }
                 }
@@ -242,16 +251,16 @@ fn convert_field<'a>(field: &'a Field) -> BuilderField<'a> {
                             let arg = args.first().unwrap();
                             if let GenericArgument::Type(ty) = arg {
                                 if segment.ident == "Option" {
-                                    return BuilderField::Optional(OptionalBuilderField {
+                                    return Ok(BuilderField::Optional(OptionalBuilderField {
                                         field,
                                         ty,
-                                    });
+                                    }));
                                 } else if let Some(each_name) = each_name {
-                                    return BuilderField::Repeated(RepeatedBuilderField {
+                                    return Ok(BuilderField::Repeated(RepeatedBuilderField {
                                         field,
                                         each_name,
                                         ty,
-                                    });
+                                    }));
                                 }
                             }
                         }
@@ -260,5 +269,5 @@ fn convert_field<'a>(field: &'a Field) -> BuilderField<'a> {
             }
         }
     }
-    return BuilderField::AllAtOnce(field);
+    return Ok(BuilderField::AllAtOnce(field));
 }
