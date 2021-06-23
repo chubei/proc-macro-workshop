@@ -1,18 +1,95 @@
-use proc_macro::TokenStream;
-use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 #[proc_macro_derive(Builder)]
-pub fn derive(input: TokenStream) -> TokenStream {
+pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let name = input.ident;
+    let vis = input.vis;
+
+    // Generate builder struct name.
+    let builder_name = format_ident!("{}Builder", name);
+    // Generate builder fields.
+    let builder_fields = builder_fields(&input.data);
+    // Generate setters for all the fields.
+    let builder_setters = builder_setters(&input.data);
 
     let expanded = quote! {
+        #[derive(Default)]
+        #vis struct #builder_name {
+            #builder_fields
+        }
+
+        impl #builder_name {
+            #builder_setters
+        }
+
         impl #name {
-            pub fn builder() {}
+            pub fn builder() -> #builder_name {
+                #builder_name::default()
+            }
         }
     };
 
-    TokenStream::from(expanded)
+    proc_macro::TokenStream::from(expanded)
+}
+
+// Generated code looks like this:
+// ```rust
+// executable: Option<String>,
+// args: Option<Vec<String>>,
+// ```
+fn builder_fields(data: &Data) -> TokenStream {
+    match *data {
+        Data::Struct(ref data) => match data.fields {
+            Fields::Named(ref fields) => {
+                let recurse = fields.named.iter().map(|f| {
+                    let name = &f.ident;
+                    let ty = &f.ty;
+                    quote! {
+                        #name: Option<#ty>,
+                    }
+                });
+                quote! {
+                    #(#recurse)*
+                }
+            }
+            _ => unimplemented!(),
+        },
+        _ => unimplemented!(),
+    }
+}
+
+// Generated code looks like this:
+// ```rust
+// pub fn executable(&mut self, executable: String) {
+//     self.executable = Some(executable);
+// }
+// pub fn args(&mut self, args: Vec<String>) {
+//     self.args = Some(args);
+// }
+// ```
+fn builder_setters(data: &Data) -> TokenStream {
+    match *data {
+        Data::Struct(ref data) => match data.fields {
+            Fields::Named(ref fileds) => {
+                let recurse = fileds.named.iter().map(|f| {
+                    let name = &f.ident;
+                    let ty = &f.ty;
+                    quote! {
+                        pub fn #name(&mut self, #name: #ty) {
+                            self.#name = Some(#name);
+                        }
+                    }
+                });
+                quote! {
+                    #(#recurse)*
+                }
+            }
+            _ => unimplemented!(),
+        },
+        _ => unimplemented!(),
+    }
 }
