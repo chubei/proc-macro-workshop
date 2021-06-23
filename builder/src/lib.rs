@@ -68,11 +68,13 @@ fn builder_fields(data: &Data) -> TokenStream {
 
 // Generated code looks like this:
 // ```rust
-// pub fn executable(&mut self, executable: String) {
+// pub fn executable(&mut self, executable: String) -> Self {
 //     self.executable = Some(executable);
+//     self
 // }
-// pub fn args(&mut self, args: Vec<String>) {
+// pub fn args(&mut self, args: Vec<String>) -> Self {
 //     self.args = Some(args);
+//     self
 // }
 // ```
 fn builder_setters(data: &Data) -> TokenStream {
@@ -83,8 +85,9 @@ fn builder_setters(data: &Data) -> TokenStream {
                     let name = &f.ident;
                     let ty = &f.ty;
                     quote! {
-                        pub fn #name(&mut self, #name: #ty) {
+                        pub fn #name(&mut self, #name: #ty) -> &mut Self {
                             self.#name = Some(#name);
+                            self
                         }
                     }
                 });
@@ -100,10 +103,10 @@ fn builder_setters(data: &Data) -> TokenStream {
 
 // Generated code looks like this:
 // ```rust
-// pub fn build(self) -> Result<Command, &'static str> {
+// pub fn build(&mut self) -> Result<Command, &'static str> {
 //     Ok(Command {
-//         executable: self.executable.ok_or("Missing field executable")?,
-//         args: self.args.ok_or("Missing field args")?,
+//         executable: self.executable.take().ok_or("Missing field executable")?,
+//         args: self.args.take().ok_or("Missing field args")?,
 //     })
 // }
 // ```
@@ -115,11 +118,11 @@ fn builder_build(name: &Ident, data: &Data) -> TokenStream {
                     let name = &f.ident;
                     let message = format!("Missing field {}", name.as_ref().unwrap().to_string());
                     quote! {
-                        #name: self.#name.ok_or(#message)?,
+                        #name: self.#name.take().ok_or(#message)?,
                     }
                 });
                 quote! {
-                    pub fn build(self) -> Result<#name, &'static str> {
+                    pub fn build(&mut self) -> Result<#name, &'static str> {
                         Ok(#name {
                             #(#recurse)*
                         })
