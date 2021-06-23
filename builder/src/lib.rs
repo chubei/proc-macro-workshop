@@ -38,7 +38,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         impl #builder_name {
             #(#builder_setters)*
 
-            pub fn build(&mut self) -> Result<#name, &'static str> {
+            pub fn build(&mut self) -> std::result::Result<#name, &'static str> {
                 Ok(#name {
                     #(#builder_constructor)*
                 })
@@ -85,21 +85,21 @@ impl<'a> BuilderField<'a> {
                 let name = &field.ident;
                 let ty = &field.ty;
                 quote! {
-                    #name: Option<#ty>,
+                    #name: std::option::Option<#ty>,
                 }
             }
             Self::Optional(field) => {
                 let name = &field.field.ident;
                 let ty = &field.ty;
                 quote! {
-                    #name: Option<#ty>,
+                    #name: std::option::Option<#ty>,
                 }
             }
             Self::Repeated(field) => {
                 let name = &field.field.ident;
                 let ty = &field.ty;
                 quote! {
-                    #name: Vec<#ty>,
+                    #name: std::vec::Vec<#ty>,
                 }
             }
         }
