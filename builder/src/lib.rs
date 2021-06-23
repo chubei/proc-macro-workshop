@@ -1,6 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Ident};
+use syn::{
+    parse_macro_input, Data, DeriveInput, Fields, GenericArgument, Ident, PathArguments, Type,
+};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -40,10 +42,47 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     proc_macro::TokenStream::from(expanded)
 }
 
+// If `ty` is an `Option<T>`, return `Option<ty for T>`, otherwise return `None`.
+fn extract_inner_if_option(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Path(path) => match path.qself {
+            Some(_) => None,
+            None => {
+                let segments = &path.path.segments;
+                if segments.len() == 1 {
+                    let segment = segments.first().unwrap();
+                    if segment.ident.to_string() == "Option" {
+                        match &segment.arguments {
+                            PathArguments::AngleBracketed(argments) => {
+                                let args = &argments.args;
+                                if args.len() == 1 {
+                                    let arg = args.first().unwrap();
+                                    match arg {
+                                        GenericArgument::Type(ty) => Some(ty),
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        },
+        _ => None,
+    }
+}
+
 // Generated code looks like this:
 // ```rust
 // executable: Option<String>,
-// args: Option<Vec<String>>,
+// current_dir: Option<String>,
 // ```
 fn builder_fields(data: &Data) -> TokenStream {
     match *data {
@@ -51,7 +90,10 @@ fn builder_fields(data: &Data) -> TokenStream {
             Fields::Named(ref fields) => {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
-                    let ty = &f.ty;
+                    let mut ty = &f.ty;
+                    if let Some(option_inner_ty) = extract_inner_if_option(ty) {
+                        ty = option_inner_ty;
+                    }
                     quote! {
                         #name: Option<#ty>,
                     }
@@ -72,7 +114,7 @@ fn builder_fields(data: &Data) -> TokenStream {
 //     self.executable = Some(executable);
 //     self
 // }
-// pub fn args(&mut self, args: Vec<String>) -> Self {
+// pub fn current_dir(&mut self, current_dir: String) -> Self {
 //     self.args = Some(args);
 //     self
 // }
@@ -83,7 +125,10 @@ fn builder_setters(data: &Data) -> TokenStream {
             Fields::Named(ref fields) => {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
-                    let ty = &f.ty;
+                    let mut ty = &f.ty;
+                    if let Some(option_inner_ty) = extract_inner_if_option(ty) {
+                        ty = option_inner_ty;
+                    }
                     quote! {
                         pub fn #name(&mut self, #name: #ty) -> &mut Self {
                             self.#name = Some(#name);
@@ -106,7 +151,7 @@ fn builder_setters(data: &Data) -> TokenStream {
 // pub fn build(&mut self) -> Result<Command, &'static str> {
 //     Ok(Command {
 //         executable: self.executable.take().ok_or("Missing field executable")?,
-//         args: self.args.take().ok_or("Missing field args")?,
+//         current_dir: self.args.take(),
 //     })
 // }
 // ```
@@ -116,9 +161,17 @@ fn builder_build(name: &Ident, data: &Data) -> TokenStream {
             Fields::Named(ref fields) => {
                 let recurse = fields.named.iter().map(|f| {
                     let name = &f.ident;
-                    let message = format!("Missing field {}", name.as_ref().unwrap().to_string());
-                    quote! {
-                        #name: self.#name.take().ok_or(#message)?,
+                    match extract_inner_if_option(&f.ty) {
+                        Some(_) => quote! {
+                            #name: self.#name.take(),
+                        },
+                        None => {
+                            let message =
+                                format!("Missing field {}", name.as_ref().unwrap().to_string());
+                            quote! {
+                                #name: self.#name.take().ok_or(#message)?,
+                            }
+                        }
                     }
                 });
                 quote! {
