@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Ident, LitInt, parse::{Parse, ParseStream}, Result, Token, parse_macro_input, Expr};
+use syn::{Ident, LitInt, parse::{Parse, ParseStream}, Result, Token, parse_macro_input, braced};
 
 #[proc_macro]
 pub fn seq(input: TokenStream) -> TokenStream {
@@ -22,7 +22,9 @@ impl Parse for Seq {
         input.parse::<LitInt>()?;
         input.parse::<Token!(..)>()?;
         input.parse::<LitInt>()?;
-        input.parse::<Expr>()?;
+        let content;
+        braced!(content in input);
+        content.parse::<proc_macro2::TokenStream>()?;
         Ok(Seq)
     }
 }
