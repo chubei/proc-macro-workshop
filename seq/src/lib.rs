@@ -11,36 +11,57 @@ pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let mut result = TokenStream::new();
     for value in seq.start..seq.end {
-        result.extend(
-            seq.body
-                .clone()
-                .into_iter()
-                .map(|token| replace_ident_recursive(token, &seq.ident.to_string(), value)),
-        );
+        result.extend(process_token_stream(
+            seq.body.clone(),
+            &seq.ident.to_string(),
+            value,
+        ));
     }
 
     result.into()
 }
 
-fn replace_ident_recursive(token: TokenTree, name: &str, value: usize) -> TokenTree {
-    match token {
-        TokenTree::Group(group) => {
-            let stream: TokenStream = group
-                .stream()
-                .into_iter()
-                .map(|token| replace_ident_recursive(token, name, value))
-                .collect();
-            TokenTree::Group(Group::new(group.delimiter(), stream))
-        }
-        TokenTree::Ident(ident) => {
-            if ident == name {
-                TokenTree::Literal(Literal::usize_unsuffixed(value))
-            } else {
-                TokenTree::Ident(ident)
+fn process_token_stream(stream: TokenStream, name: &str, value: usize) -> TokenStream {
+    let mut result: Vec<TokenTree> = vec![];
+    let tokens: Vec<_> = stream.into_iter().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            TokenTree::Group(group) => {
+                let stream = process_token_stream(group.stream(), name, value);
+                result.push(TokenTree::Group(Group::new(group.delimiter(), stream)));
             }
+            TokenTree::Ident(ident) => {
+                // Unprefixed.
+                if ident == name {
+                    result.push(TokenTree::Literal(Literal::usize_unsuffixed(value)));
+                    i += 1;
+                    continue;
+                }
+                // Look forward.
+                if let TokenTree::Punct(punct) = &tokens[i + 1] {
+                    if punct.as_char() == '~' {
+                        if let TokenTree::Ident(ident2) = &tokens[i + 2] {
+                            if ident2 == name {
+                                let ident = Ident::new(
+                                    &format!("{}{}", ident.to_string(), value),
+                                    ident.span(),
+                                );
+                                result.push(TokenTree::Ident(ident));
+                                i += 3;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                result.push(TokenTree::Ident(ident.clone()));
+            }
+            other => result.push(other.clone()),
         }
-        other => other,
+
+        i += 1;
     }
+    result.into_iter().collect()
 }
 
 #[derive(Debug)]
