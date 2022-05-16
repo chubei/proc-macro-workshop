@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use syn::{
@@ -12,29 +12,33 @@ pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let seq = parse_macro_input!(input as Seq);
 
     let seq_ident_name = &seq.ident.to_string();
-    let range = seq.start..seq.end;
 
-    let result = if seq.body.has_repeat_section() {
-        try_collect(
-            seq.body
-                .instantiate(seq_ident_name, InstMode::RepeatSection(range)),
-        )
+    match seq.range {
+        SeqRange::Range(range) => seq_impl(seq.body, seq_ident_name, range),
+        SeqRange::RangeInclusive(range) => seq_impl(seq.body, seq_ident_name, range),
+    }
+    .into()
+}
+
+fn seq_impl<R: Iterator<Item = usize> + Clone>(
+    stream: SeqTokenStream,
+    name: &str,
+    range: R,
+) -> TokenStream {
+    let result = if stream.has_repeat_section() {
+        try_collect(stream.instantiate(name, InstMode::RepeatSection(range)))
     } else {
         try_collect(
             range
-                .map(|value| {
-                    seq.body
-                        .instantiate(&seq_ident_name, InstMode::Whole(value))
-                })
+                .map(|value| stream.instantiate::<'_, Range<usize>>(name, InstMode::Whole(value)))
                 .flatten(),
         )
     };
 
-    let stream = match result {
+    match result {
         Ok(stream) => stream,
         Err(error) => error.into_compile_error(),
-    };
-    stream.into()
+    }
 }
 
 fn try_collect<T: FromIterator<TokenTree>>(
@@ -283,7 +287,11 @@ impl SeqTokenTree {
         }
     }
 
-    fn instantiate(&self, name: &str, mode: InstMode) -> Vec<Result<TokenTree>> {
+    fn instantiate<R: Iterator<Item = usize> + Clone>(
+        &self,
+        name: &str,
+        mode: InstMode<R>,
+    ) -> Vec<Result<TokenTree>> {
         match self {
             Self::SeqGroup(group) => match group.delimiter {
                 SeqDelimiter::Delimiter(delimiter) => {
@@ -301,7 +309,11 @@ impl SeqTokenTree {
                         }
                     };
                     range
-                        .map(|value| group.stream.instantiate(name, InstMode::Whole(value)))
+                        .map(|value| {
+                            group
+                                .stream
+                                .instantiate::<'_, Range<usize>>(name, InstMode::Whole(value))
+                        })
                         .flatten()
                         .collect()
                 }
@@ -344,8 +356,8 @@ impl SeqTokenTree {
 }
 
 #[derive(Debug, Clone)]
-enum InstMode {
-    RepeatSection(Range<usize>),
+enum InstMode<R: Iterator<Item = usize>> {
+    RepeatSection(R),
     Whole(usize),
 }
 
@@ -382,10 +394,10 @@ impl SeqTokenStream {
         false
     }
 
-    fn instantiate<'a>(
+    fn instantiate<'a, R: Iterator<Item = usize> + Clone + 'a>(
         &'a self,
         name: &'a str,
-        mode: InstMode,
+        mode: InstMode<R>,
     ) -> impl Iterator<Item = Result<TokenTree>> + 'a {
         self.tokens
             .iter()
@@ -402,28 +414,55 @@ impl Parse for SeqTokenStream {
 }
 
 #[derive(Debug)]
+enum SeqRange {
+    Range(Range<usize>),
+    RangeInclusive(RangeInclusive<usize>),
+}
+
+#[derive(Debug)]
+enum SeqRangeKind {
+    Range,
+    RangeInclusive,
+}
+
+#[derive(Debug)]
 struct Seq {
     ident: Ident,
-    start: usize,
-    end: usize,
+    range: SeqRange,
     body: SeqTokenStream,
 }
 
 impl Parse for Seq {
     fn parse(input: ParseStream) -> Result<Self> {
         let ident = input.parse::<Ident>()?;
+
         input.parse::<Token!(in)>()?;
-        let start = input.parse::<LitInt>()?.base10_parse()?;
-        input.parse::<Token!(..)>()?;
-        let end = input.parse::<LitInt>()?.base10_parse()?;
+
+        let lower = input.parse::<LitInt>()?.base10_parse()?;
+
+        let range_kind = {
+            let lookahead1 = input.lookahead1();
+            if lookahead1.peek(Token!(..=)) {
+                input.parse::<Token!(..=)>()?;
+                SeqRangeKind::RangeInclusive
+            } else if lookahead1.peek(Token!(..)) {
+                input.parse::<Token!(..)>()?;
+                SeqRangeKind::Range
+            } else {
+                return Err(lookahead1.error());
+            }
+        };
+
+        let upper = input.parse::<LitInt>()?.base10_parse()?;
+
+        let range = match range_kind {
+            SeqRangeKind::Range => SeqRange::Range(lower..upper),
+            SeqRangeKind::RangeInclusive => SeqRange::RangeInclusive(lower..=upper),
+        };
+
         let content;
         braced!(content in input);
         let body = content.parse::<SeqTokenStream>()?;
-        Ok(Seq {
-            ident,
-            start,
-            end,
-            body,
-        })
+        Ok(Seq { ident, range, body })
     }
 }
